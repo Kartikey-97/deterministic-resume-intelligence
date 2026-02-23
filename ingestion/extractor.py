@@ -33,7 +33,8 @@ def extract_pdfplumber(path):
 
 def extract_docx(path):
     text = ""
-
+    #pdf plumber file=== pages== text
+    #docx=== file=== para=== runs===text
     try:
         doc = Document(path)
         for para in doc.paragraphs:

@@ -1,16 +1,97 @@
 import os
 from ingestion.extractor import extract_text, extract_fitz, extract_pdfplumber
+from utils.text_cleaner import clean_text
+from segmentation.section_detector import segment_resume
 
 SAMPLE_FOLDER= "data/sample"
 
-def test_extraction():
-  
 
-  files = os.listdir(SAMPLE_FOLDER)[:1] # this only gets the first one files
+
+def single_extraction():
+    files2="data/sample/10641230.pdf"
+    print("="*50)
+    print("Testing",files2)
+
+    try:
+        text=extract_fitz(files2)
+
+        text1=clean_text(extract_pdfplumber(files2))
+
+        text2=clean_text(extract_fitz(files2))
+
+        text3=extract_pdfplumber(files2)
+
+        if len(text.strip())<500:
+            print("this was a weak extraction")
+        
+        
+        print("\n This is the extracted text: \n")
+        #print("\n First 500 characters: \n")
+        print()
+        print()
+
+        print("="*50)
+        print("\n This is the cleaned extracted fitz text: \n")
+        print("Extracted length: ", len(text))
+        print(text)
+
+
+        sections = segment_resume(text2)
+
+        print(sections["skills"]["lines"])
+        print(sections["skills"]["confidence"])
+        print("\nDetected sections and confidence:\n")
+        for k, v in sections.items():
+            print(k, "->", v["confidence"])
+            print("Sample:", v["lines"][:2])
+            print()
+        print()
+        print()
+
+        
+        """
+        print("="*50)
+        print("\n This is the unlcleaned fitz text: \n")
+        print("Extracted length: ", len(text2))
+        print(text2)
+        print()
+        print()
+
+
+        print("="*50)
+        print("\n This is the cleaned pdfplumber text: \n")
+        print("Extracted length: ", len(text1))
+        print(text1)
+        print()
+        print()
+
+        print("="*50)
+        print("\n This is the uncleaned pdfplumber text: \n")
+        print("Extracted length: ", len(text3))
+        print(text3)
+        print()
+        print()
+
+        
+
+        print("="*50)
+        print("Difference between fitz and pdfplumber:")
+        print(len(set(text1.split()) - set(text2.split())))
+        """          
+
+    except Exception as e:
+       print("Failed cause of : ",e)
+
+
+    
+def test_extraction():
+
+  files = os.listdir(SAMPLE_FOLDER)[:2] # this only gets the first one files
 
   for file in files:
     path=os.path.join(SAMPLE_FOLDER,file)
-
+    
+    
     print("="*50)
     print("Testing",file)
 
@@ -60,7 +141,8 @@ def test_extraction():
 
 
 if __name__=="__main__":
-   test_extraction()
+   single_extraction()
+
 
 
     
