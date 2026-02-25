@@ -27,5 +27,6 @@ def clean_text(text: str) -> str:
 
     # Normalize bullets and separators
     text = re.sub(r"[•·▪►q]", " ", text)
+    text = re.sub(r"[ï¼​]", " ", text)
 
     return text.strip()

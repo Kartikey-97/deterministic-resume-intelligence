@@ -7,7 +7,7 @@ from segmentation.section_detector import segment_resume
 SAMPLE_FOLDER = "data/sample"
 
 def single_extraction():
-    files2 = "data/sample/10641230.pdf"
+    files2 = "data/sample/Resume-Sample-2.pdf"
     print("=" * 50)
     print("Testing", files2)
 

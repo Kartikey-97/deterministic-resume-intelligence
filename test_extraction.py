@@ -8,7 +8,7 @@ SAMPLE_FOLDER= "data/sample"
 
 
 def single_extraction():
-    files2="data/sample/10641230.pdf"
+    files2="data/sample/Resume-Sample-2.pdf"
     print("="*50)
     print("Testing",files2)
 
@@ -32,6 +32,7 @@ def single_extraction():
 
         print("="*50)
         print("\n This is the cleaned extracted fitz text: \n")
+        clean_text(text)
         print("Extracted length: ", len(text))
         print(text)
 
