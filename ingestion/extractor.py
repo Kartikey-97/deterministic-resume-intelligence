@@ -35,9 +35,17 @@ def extract_fitz_advanced(path):
                         # Color 16777215 is 0xFFFFFF (White). 
                         # If a candidate puts white text on a white PDF, they are gaming the ATS.
                         # We flag it, but don't add the text to our parsing engine.
+                        # --- FRAUD DETECTION ---
+                        # 1. White Text Check
                         if span.get("color") == 16777215:
                             if "invisible_text" not in fraud_flags:
                                 fraud_flags.append("invisible_text")
+                            continue # Skip adding this text
+                            
+                        # 2. Microscopic Text Check (Font size < 4 is unreadable to humans)
+                        if span.get("size", 10) < 4.0:
+                            if "microscopic_text" not in fraud_flags:
+                                fraud_flags.append("microscopic_text")
                             continue # Skip adding this text
                         
                         block_text += span.get("text", "") + " "

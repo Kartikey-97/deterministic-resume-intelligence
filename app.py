@@ -7,11 +7,11 @@ from pipeline import process_resume
 
 st.set_page_config(page_title="Deterministic ATS Leaderboard", layout="wide", page_icon="🚀")
 
-st.title("🚀 Automated Resume Extraction & Ranking Engine")
+st.title("Automated Resume Extraction & Ranking Engine")
 st.markdown("Deterministic scoring. Explainable AI. Zero bias.")
 
 # --- SIDEBAR CONFIGURATION ---
-st.sidebar.header("⚙️ Configure Scoring Weights")
+st.sidebar.header("Configure Scoring Weights")
 st.sidebar.markdown("Adjust priorities based on job requirements.")
 
 with st.sidebar.expander("Adjust Weights (%)", expanded=False):
@@ -101,6 +101,10 @@ if uploaded_files:
                 df = pd.DataFrame(results)
                 df = df.sort_values(by="Score", ascending=False).reset_index(drop=True)
                 
+                df.index = df.index + 1
+                df.index.name = "Rank"
+
+
                 st.subheader("🏆 Candidate Leaderboard")
                 st.dataframe(
                     df[["Candidate", "Score", "Status", "Completeness"]],

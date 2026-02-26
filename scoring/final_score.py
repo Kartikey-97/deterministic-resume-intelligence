@@ -8,14 +8,30 @@ from scoring.extracurricular_score import score_extracurricular
 from scoring.minor_score import score_minor
 
 def is_fresher(exp_features):
-    return exp_features["total_experience_years"] < 1
+    # Standard Indian HR boundary: 0-2 years is considered Fresher/Junior
+    return exp_features["total_experience_years"] < 2.0
 
 def completeness_score(features):
     score = 0
-    if features.get("projects", {}).get("has_projects"): score += 1
-    if features.get("achievements", {}).get("has_achievements"): score += 1
-    if len(features.get("minor", {}).get("online_presence", [])) > 0: score += 1
-    if len(features.get("minor", {}).get("languages_detected", [])) > 0: score += 1
+    
+    # 1. Projects: Check if the projects dictionary has any data or points
+    projs = features.get("projects", {})
+    if projs and (projs.get("has_projects") or projs.get("project_count", 0) > 0 or len(projs) > 0): 
+        score += 1
+        
+    # 2. Achievements: Check if the achievements dictionary has data
+    achievs = features.get("achievements", {})
+    if achievs and (achievs.get("has_achievements") or achievs.get("achievement_count", 0) > 0 or len(achievs) > 0): 
+        score += 1
+        
+    # 3. Online Presence: LinkedIn, GitHub, Portfolio links
+    if len(features.get("minor", {}).get("online_presence", [])) > 0: 
+        score += 1
+        
+    # 4. Languages: Any spoken/written languages detected
+    if len(features.get("minor", {}).get("languages_detected", [])) > 0: 
+        score += 1
+        
     return score
 
 def prestige_multiplier(features):
@@ -28,18 +44,17 @@ def prestige_multiplier(features):
     elif college_tier == 2: multiplier += 0.02
     return multiplier
 
-# The default maximum possible points per category based on original rules
 DEFAULT_MAX = {
     "internships": 20.0, "experience": 5.0, "skills": 20.0, "projects": 15.0,
     "cgpa_score": 10.0, "achievements": 10.0, "extracurricular": 5.0,
-    "degree_score": 3.0, "language": 3.0, "online": 3.0, "college": 2.0, "school": 2.0
+    "degree_score": 3.0, "language": 3.0, "online": 3.0, "college": 3.0, "school": 3.0
 }
 
 def compute_final_score(features, custom_weights=None):
     breakdown = {}
     fresher = is_fresher(features["experience"])
     
-    # 1. Gather Raw Scores
+    # 1. Gather Raw Scores (out of their original default maximums)
     raw = {}
     raw["internships"] = score_internships(features["experience"])
     raw["experience"] = score_experience(features["experience"])
@@ -59,26 +74,41 @@ def compute_final_score(features, custom_weights=None):
     raw["college"] = minor.get("college", 0)
     raw["school"] = minor.get("school", 0)
 
-    # 2. Apply Custom Weights Proportionally
-    if custom_weights:
-        for key in raw:
-            if DEFAULT_MAX[key] > 0: # Prevent division by zero
-                # Calculate what % of the max they earned, then multiply by the new UI weight
-                percentage_earned = raw[key] / DEFAULT_MAX[key]
-                breakdown[key] = percentage_earned * custom_weights.get(key, DEFAULT_MAX[key])
-            else:
-                breakdown[key] = 0
-    else:
-        # Fallback to defaults
-        breakdown = raw.copy()
+    # 2. Setup the Weights Baseline
+    weights = custom_weights.copy() if custom_weights else DEFAULT_MAX.copy()
 
-    # 3. Completeness & Prestige calibration
+    # 3. THE ARCHITECT'S FIX: Dynamic Redistribution 
+    # If they are experienced, we shift the irrelevant UI weights into the core metrics.
+    if not fresher:
+        # Shift Internship weight entirely into Experience
+        weights["experience"] += weights.get("internships", 20.0)
+        weights["internships"] = 0.0
+        
+        # Shift Extra-curricular and School weights into Skills and Achievements
+        extra_pool = weights.get("extracurricular", 5.0) + weights.get("school", 3.0)
+        weights["skills"] += (extra_pool * 0.6)
+        weights["achievements"] += (extra_pool * 0.4)
+        
+        weights["extracurricular"] = 0.0
+        weights["school"] = 0.0
+
+    # 4. Apply the adjusted weights
+    for key in raw:
+        if DEFAULT_MAX[key] > 0:
+            percentage_earned = raw[key] / DEFAULT_MAX[key]
+            breakdown[key] = percentage_earned * weights.get(key, 0)
+        else:
+            breakdown[key] = 0
+
+    # 5. Calibration
     comp = completeness_score(features)
     raw_total = sum(breakdown.values())
     
     total = raw_total * (1 + 0.04 * comp)
     total *= prestige_multiplier(features)
-    final_score = min(total, 100.0)
+    
+    # Ensure it never drops below 0 or goes above 100
+    final_score = max(0.0, min(total, 100.0))
     
     return {
         "total_score": round(final_score, 2),

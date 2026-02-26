@@ -52,13 +52,15 @@ def process_resume(pdf_path: str, custom_weights: dict = None) -> dict:
         }
         
         # PASS CUSTOM WEIGHTS TO SCORING ENGINE
+        # PASS CUSTOM WEIGHTS TO SCORING ENGINE
         score_data = compute_final_score(features, custom_weights)
         
         score_data["status"] = "success"
         score_data["fraud_flags"] = fraud_flags
         
-        if "invisible_text" in fraud_flags:
-            score_data["breakdown"]["WARNING"] = "Invisible text detected and ignored. Please remove hidden keywords."
+        # --- UPDATED FRAUD CHECK: Checks for both invisible AND microscopic text ---
+        if "invisible_text" in fraud_flags or "microscopic_text" in fraud_flags:
+            score_data["breakdown"]["WARNING"] = "Hidden/Microscopic text detected and ignored. Please remove this."
             score_data["status"] = "WARNING_ISSUED"
 
         return score_data
