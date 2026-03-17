@@ -1,0 +1,7 @@
+[theme]
+base="light"
+primaryColor="#4338CA" # Deep Indigo
+backgroundColor="#F8FAFC" # Soft Slate Background
+secondaryBackgroundColor="#FFFFFF" # Pure White for sidebar
+textColor="#0F172A" # Deep Slate Text
+font="sans serif"

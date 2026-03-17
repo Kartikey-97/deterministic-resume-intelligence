@@ -2,9 +2,7 @@ import re
 from rapidfuzz import fuzz
 from features.skill_taxonomy import SKILL_TAXONOMY
 
-
 def extract_skills(sections):
-
     detected = {}
 
     # Collect skills from multiple high-signal sections
@@ -12,41 +10,51 @@ def extract_skills(sections):
     for sec in ["skills", "projects", "experience", "certifications"]:
         skill_lines.extend(sections.get(sec, {}).get("lines", []))
 
-    # Join text
     skill_text = " ".join(skill_lines).lower()
-
-    # Tokenize once
+    
+    # Tokenize text into words for fast lookup
     tokens = set(skill_text.split())
 
-    # Domain-based extraction
     for domain, skills in SKILL_TAXONOMY.items():
-
-        detected[domain] = []
+        domain_skills_found = []
 
         for skill, variations in skills.items():
-
             found = False
 
-            # Exact match first (production-safe)
+            # 1. THE EXACT MATCH (Safest & Fastest)
             for v in variations:
+                # Use strict word boundaries
                 pattern = r"\b" + re.escape(v) + r"\b"
                 if re.search(pattern, skill_text):
-                    detected[domain].append(skill)
+                    domain_skills_found.append(skill)
                     found = True
                     break
 
-            # Fuzzy fallback only if needed
+            # 2. THE RESTRICTED FUZZY MATCH
             if not found:
                 for v in variations:
+                    # RULE 1: Only fuzzy match multi-word skills. 
+                    # Single words (like "C" or "Java") should NEVER be fuzzy matched.
+                    v_words = v.split()
+                    if len(v_words) < 2:
+                        continue
+                    
+                    # RULE 2: At least one critical word from the skill must exist in the text
+                    # before we burn CPU cycles on fuzzy math.
+                    if not any(word in tokens for word in v_words):
+                        continue
 
-                    # Reduce noise and speed up
-                    if any(v_part in tokens for v_part in v.split()):
-                        score = fuzz.partial_ratio(v, skill_text)
-                    else:
-                        score = 0
+                    # RULE 3: Strict token_sort_ratio instead of token_set_ratio. 
+                    # Sort_ratio prevents a 10-word sentence from matching a 2-word skill just because they share words.
+                    score = fuzz.token_sort_ratio(v, skill_text)
 
-                    if score > 85:
-                        detected[domain].append(skill)
+                    # RULE 4: Ultra-high threshold for multi-word phrases
+                    if score > 92:
+                        domain_skills_found.append(skill)
                         break
+        
+        # Only add the domain to the JSON if it actually found skills, keeping the JSON tiny and clean
+        if domain_skills_found:
+            detected[domain] = list(set(domain_skills_found))
 
     return detected
