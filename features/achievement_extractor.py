@@ -1,63 +1,62 @@
+"""
+features/achievement_extractor.py — v2
+
+BUG FIXED: has_achievements was always True.
+
+Original scanned ["achievements", "education", "experience"], so every
+candidate with any education/experience text (all 19 of them) returned
+has_achievements=True. This gave everyone a free +1 in completeness_score.
+
+Fix:
+  1. Only scan the "achievements" section and "certifications" (hackathon wins
+     often appear there). Do NOT scan education or experience.
+  2. Require at least 1 keyword hit — a section existing but having no
+     achievement keywords does not count as an achievement.
+"""
+
 import re
 
 IMPACT_KEYWORDS = [
-    "won", "rank", "award", "achievement",
-    "recognition", "scholarship", "medal",
-    "top", "first", "second", "third",
-    "dean"
+    "won", "winner", "rank", "ranked", "award", "awarded",
+    "achievement", "recognition", "recognized",
+    "scholarship", "medal", "honor", "honour",
+    "top", "first place", "second place", "third place",
+    "dean", "distinction", "merit",
+    "hackathon", "competition", "contest", "finalist",
+    "gold", "silver", "bronze",
+    "selected", "shortlisted", "national", "international",
 ]
 
-def is_year(num):
-    """Filter out year-like numbers."""
+
+def _is_year(num):
     return 1900 <= num <= 2035
 
 
 def extract_achievements(sections):
+    ach_lines  = sections.get("achievements", {}).get("lines", [])
+    cert_lines = sections.get("certifications", {}).get("lines", [])
+    all_lines  = ach_lines + cert_lines
 
-    # Scan multiple sections for robustness
-    ach_lines = []
-    for sec in ["achievements", "education", "experience"]:
-        ach_lines.extend(sections.get(sec, {}).get("lines", []))
+    if not all_lines:
+        return {"has_achievements": False, "quantified": 0, "impact_score": 0}
 
-    if not ach_lines:
-        return {
-            "has_achievements": False,
-            "quantified": 0,
-            "impact_score": 0
-        }
+    full_text = " ".join(all_lines).lower()
 
-    full_text = " ".join(ach_lines).lower()
-
-    # -----------------------------
-    # 1. Impact keyword detection
-    # -----------------------------
     keyword_hits = sum(1 for k in IMPACT_KEYWORDS if k in full_text)
 
-    # -----------------------------
-    # 2. Quantifiable impact
-    # -----------------------------
-    # Only count meaningful metrics
-    quantifiable_matches = re.findall(
-        r"\b\d+(?:\.\d+)?(?:%|x|k|m)\b",
-        full_text
-    )
-
-    # Filter out suspicious values
-    filtered = []
-    for m in quantifiable_matches:
-        num = float(re.findall(r"\d+(?:\.\d+)?", m)[0])
-        if not is_year(num):
-            filtered.append(m)
-
+    quant = re.findall(r"\b\d+(?:\.\d+)?(?:%|x|k|m)\b", full_text)
+    filtered = [
+        m for m in quant
+        if not _is_year(float(re.findall(r"\d+(?:\.\d+)?", m)[0]))
+    ]
     quantified = len(filtered)
 
-    # -----------------------------
-    # 3. Final score
-    # -----------------------------
-    impact_score = min(keyword_hits + quantified, 10)
+    # Require at least 1 keyword hit — existence of the section is not enough
+    has_achievements = keyword_hits > 0
+    impact_score     = min(keyword_hits + quantified, 10)
 
     return {
-        "has_achievements": True,
-        "quantified": quantified,
-        "impact_score": impact_score
+        "has_achievements": has_achievements,
+        "quantified":       quantified,
+        "impact_score":     impact_score,
     }

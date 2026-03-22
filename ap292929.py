@@ -3,14 +3,13 @@
 # ==========================================
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
 import os
 import tempfile
 import time
 import re
 
 from pipeline import process_resume
-from llm.hr_assistant import analyze_candidate_llm
+from llm.hr_assistant import analyze_candidate_llm # <-- New AI Integration
 
 st.set_page_config(page_title="Resume Ranker", layout="wide")
 
@@ -90,55 +89,12 @@ st.markdown("""
         font-size: 1.1rem; color: #334155; font-weight: 600;
         margin-top: 15px; margin-bottom: 10px;
     }
-
-    /* Olympic Podium */
-    .podium-wrap {
-        display: flex; align-items: flex-end; justify-content: center;
-        gap: 8px; padding: 12px 0 0 0;
-    }
-    .podium-slot {
-        display: flex; flex-direction: column; align-items: center;
-        flex: 1; max-width: 220px;
-    }
-    .podium-name-plate {
-        width: 100%; text-align: center; padding: 14px 10px 10px;
-        background: #FFFFFF; border: 1px solid #E2E8F0;
-        border-radius: 8px 8px 0 0;
-        box-shadow: 0 -2px 8px rgba(0,0,0,0.04);
-    }
-    .podium-rank-num {
-        font-size: 1rem; font-weight: 800; letter-spacing: 2px;
-        text-transform: uppercase; margin-bottom: 4px;
-    }
-    .podium-rank-gold   { color: #D97706; }
-    .podium-rank-silver { color: #6B7280; }
-    .podium-rank-bronze { color: #92400E; }
-    .podium-cand-name {
-        font-size: 1rem; font-weight: 700; color: #1E293B;
-        margin-bottom: 2px; white-space: nowrap;
-        overflow: hidden; text-overflow: ellipsis;
-    }
-    .podium-cand-score {
-        font-size: 1.5rem; font-weight: 800; color: #4338CA; margin-bottom: 2px;
-    }
-    .podium-cand-meta { font-size: 0.75rem; color: #64748B; line-height: 1.4; }
-    .podium-block {
-        width: 100%; border-radius: 0 0 4px 4px;
-    }
-    .podium-block-gold   { background: linear-gradient(180deg,#FBBF24,#D97706); }
-    .podium-block-silver { background: linear-gradient(180deg,#D1D5DB,#9CA3AF); }
-    .podium-block-bronze { background: linear-gradient(180deg,#D97706,#92400E); }
-
-    /* Score tier */
-    .tier-strong     { color: #16a34a; font-weight: 700; }
-    .tier-competent  { color: #ca8a04; font-weight: 700; }
-    .tier-developing { color: #dc2626; font-weight: 700; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ==========================================
-# SECTION 3: UTILITY FUNCTIONS
+# SECTION 3: UTILITY FUNCTIONS & REGEX
 # ==========================================
 def clean_and_reindex(data):
     if isinstance(data, dict):
@@ -216,7 +172,7 @@ def extract_contact_info(text, filename):
     for u in all_urls:
         u_lower = u.lower()
         if linkedin_m and linkedin_m.group(0).lower() in u_lower: continue
-        if github_m   and github_m.group(0).lower()   in u_lower: continue
+        if github_m and github_m.group(0).lower() in u_lower: continue
         if leetcode_m and leetcode_m.group(0).lower() in u_lower: continue
         if "gmail.com" in u_lower or "yahoo.com" in u_lower or "canva.com" in u_lower: continue
         portfolio = ("https://" + u.replace("https://", "").replace("http://", "")
@@ -225,187 +181,37 @@ def extract_contact_info(text, filename):
 
     return name, email, phone, linkedin, github, leetcode, portfolio
 
-
 def display_profession(p: str) -> str:
+    """
+    Corrects .title() casing for technical acronyms.
+      .title() produces: "Ai & Machine Learning", "Embedded & Iot", "Devops"
+      This produces:     "AI & Machine Learning", "Embedded & IoT", "DevOps"
+ 
+    Works on both raw lower-case input and already-.title()-cased strings.
+    Handles "&" separators correctly by operating on the word core only.
+    """
     FIXES = {
-        "ai": "AI", "ml": "ML", "iot": "IoT", "devops": "DevOps",
-        "nlp": "NLP", "api": "API", "ui": "UI", "ux": "UX",
-        "erp": "ERP", "crm": "CRM",
+        "ai":     "AI",
+        "ml":     "ML",
+        "iot":    "IoT",
+        "devops": "DevOps",
+        "nlp":    "NLP",
+        "api":    "API",
+        "ui":     "UI",
+        "ux":     "UX",
+        "erp":    "ERP",
+        "crm":    "CRM",
     }
     result = []
     for word in p.split():
+        # Separate leading/trailing punctuation (e.g. "&") from the alpha core
         m = re.match(r'^([^a-zA-Z0-9]*)([a-zA-Z0-9]+)([^a-zA-Z0-9]*)$', word)
         if m:
             prefix, core, suffix = m.group(1), m.group(2), m.group(3)
             result.append(prefix + FIXES.get(core.lower(), core.capitalize()) + suffix)
         else:
-            result.append(word)
+            result.append(word)   # pure punctuation token like "&" — keep as-is
     return " ".join(result)
-
-
-def score_tier_label(score: float) -> str:
-    if score >= 60:   return "<span class='tier-strong'>Strong</span>"
-    elif score >= 40: return "<span class='tier-competent'>Competent</span>"
-    else:             return "<span class='tier-developing'>Developing</span>"
-
-
-def get_all_skills(df: pd.DataFrame) -> list:
-    """Aggregate all unique skill values from the batch for search suggestions."""
-    skills_set = set()
-    for extracted in df["Extracted Data"]:
-        skills_data = extracted.get("skills", {})
-        for skill_list in skills_data.values():
-            if isinstance(skill_list, dict):
-                for v in skill_list.values():
-                    skills_set.add(v.replace("_", " ").title())
-            elif isinstance(skill_list, list):
-                for v in skill_list:
-                    skills_set.add(v.replace("_", " ").title())
-    return sorted(skills_set)
-
-
-# Radar chart config
-_RADAR_DIMS = [
-    ("Experience",   ["internships", "experience"]),
-    ("Skills",       ["skills"]),
-    ("Projects",     ["projects"]),
-    ("Education",    ["cgpa_score", "degree_score"]),
-    ("Achievements", ["achievements", "extracurricular"]),
-    ("Profile",      ["language", "online", "college", "school"]),
-]
-_DEFAULT_MAX = {
-    "internships": 20.0, "experience": 5.0, "skills": 20.0, "projects": 15.0,
-    "cgpa_score": 10.0,  "achievements": 10.0, "extracurricular": 5.0,
-    "degree_score": 3.0, "language": 3.0, "online": 3.0,
-    "college": 3.0, "school": 3.0,
-}
-
-def build_radar_chart(breakdown: dict, candidate_name: str, current_weights: dict) -> go.Figure:
-    labels, values = [], []
-    for dim_label, keys in _RADAR_DIMS:
-        # Calculate what percentage of the available weight they earned
-        dim_earned = sum(breakdown.get(k, 0) for k in keys)
-        dim_max = sum(current_weights.get(k, 0) for k in keys)
-        
-        pct = (dim_earned / dim_max) * 100 if dim_max > 0 else 0
-        labels.append(dim_label)
-        values.append(min(round(pct, 1), 100.0)) # Clamp at 100 to prevent visual breakout
-
-    labels_c = labels + [labels[0]]
-    values_c = values + [values[0]]
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatterpolar(
-        r=values_c, theta=labels_c,
-        fill='toself',
-        fillcolor='rgba(67, 56, 202, 0.15)',
-        line=dict(color='#4338CA', width=2),
-        marker=dict(size=6, color='#4338CA'),
-        name=candidate_name,
-    ))
-    fig.update_layout(
-        polar=dict(
-            bgcolor='rgba(248,250,252,0)',
-            radialaxis=dict(
-                visible=True, range=[0, 100],
-                tickfont=dict(size=9, color='#94A3B8'),
-                ticksuffix='%', gridcolor='#E2E8F0', linecolor='#E2E8F0',
-            ),
-            angularaxis=dict(
-                tickfont=dict(size=11, color='#334155', family='sans-serif'),
-                linecolor='#E2E8F0', gridcolor='#E2E8F0',
-            ),
-        ),
-        showlegend=False,
-        margin=dict(t=20, b=20, l=40, r=40),
-        height=260,
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    return fig
-
-
-def build_score_distribution(df: pd.DataFrame) -> go.Figure:
-    """
-    Horizontal bar chart showing every candidate's score ranked top to bottom.
-    Color-coded: green >= 60 (Strong), amber 40-59 (Competent), red < 40 (Developing).
-    Threshold dotted lines at 40 and 60.
-    """
-    sorted_df = df.sort_values("Score", ascending=True).copy()
- 
-    # Short display names: strip "Resume" prefix and ".pdf"
-    import re
-    sorted_df["ShortName"] = (
-        sorted_df["Candidate"]
-        .str.replace(r"^Resume", "", regex=True)
-        .str.replace(".pdf", "", regex=False)
-        .str[:20]
-    )
- 
-    colors = [
-        "#16a34a" if s >= 60 else ("#ca8a04" if s >= 40 else "#dc2626")
-        for s in sorted_df["Score"]
-    ]
- 
-    fig = go.Figure(go.Bar(
-        x=sorted_df["Score"],
-        y=sorted_df["ShortName"],
-        orientation="h",
-        marker=dict(
-            color=colors,
-            opacity=0.85,
-            line=dict(color="white", width=0.5),
-        ),
-        text=[f"  {s:.1f}" for s in sorted_df["Score"]],
-        textposition="inside",
-        insidetextanchor="start",
-        textfont=dict(size=11, color="white", family="sans-serif"),
-        hovertemplate="<b>%{y}</b><br>Score: %{x:.2f}<extra></extra>",
-        width=0.7,       # bar thickness relative to gap
-    ))
- 
-    n = len(sorted_df)
- 
-    # Threshold annotation lines
-    for x_val, label, color in [
-        (60, "Strong (60)", "#16a34a"),
-        (40, "Competent (40)", "#ca8a04"),
-    ]:
-        fig.add_shape(
-            type="line", x0=x_val, x1=x_val, y0=-0.5, y1=n - 0.5,
-            line=dict(color=color, width=1.5, dash="dot"),
-        )
-        fig.add_annotation(
-            x=x_val, y=n - 0.5, text=label, showarrow=False,
-            font=dict(size=9, color=color),
-            xanchor="center", yanchor="bottom",
-            bgcolor="white", bordercolor=color,
-            borderwidth=1, borderpad=2, yshift=4,
-        )
- 
-    fig.update_layout(
-        xaxis=dict(
-            range=[0, 105],
-            title="Score (0–100)",
-            gridcolor="#F1F5F9",
-            tickfont=dict(color="#64748B", size=11),
-            zeroline=False,
-        ),
-        yaxis=dict(
-            tickfont=dict(size=11, color="#334155"),
-            automargin=True,
-            gridcolor="#F8FAFC",
-        ),
-        plot_bgcolor="rgba(248, 250, 252, 0)",
-        paper_bgcolor="rgba(0, 0, 0, 0)",
-        margin=dict(t=30, b=20, l=10, r=60),
-        height=max(300, n * 36),   # 36px per candidate — thick enough to read
-        bargap=0.30,
-        dragmode=False,
-        hovermode="y unified",
-    )
-    return fig
- 
 
 
 # ==========================================
@@ -446,10 +252,18 @@ with st.sidebar.expander("Adjust HR Weights (%)", expanded=False):
     w_school      = st.slider("School Marks",      0, 10,  3)
 
 custom_weights = {
-    "internships": w_internships, "skills": w_skills, "projects": w_projects,
-    "cgpa_score": w_cgpa, "achievements": w_achievements, "experience": w_experience,
-    "extracurricular": w_extra, "degree_score": w_degree, "language": w_lang,
-    "online": w_online, "college": w_college, "school": w_school
+    "internships":  w_internships,
+    "skills":       w_skills,
+    "projects":     w_projects,
+    "cgpa_score":   w_cgpa,
+    "achievements": w_achievements,
+    "experience":   w_experience,
+    "extracurricular": w_extra,
+    "degree_score": w_degree,
+    "language":     w_lang,
+    "online":       w_online,
+    "college":      w_college,
+    "school":       w_school
 }
 
 total_raw_weight = sum(custom_weights.values())
@@ -555,27 +369,31 @@ if uploaded_files:
                 status_label = ("FLAGGED (Anomalous Format)" if is_fraud
                                 else ("Fresher" if score_data.get("fresher") else "Experienced"))
                 profession   = score_data.get("profession", "General / Uncategorized")
-                ext_data     = score_data.get("extracted_data", {})
-                exp_data     = ext_data.get("experience", {})
+
+                ext_data  = score_data.get("extracted_data", {})
+                exp_data  = ext_data.get("experience", {})
+                exp_years = exp_data.get("total_experience_years", 0)
 
                 results.append({
-                    "Candidate":      file.name,
-                    "Profession":     display_profession(profession),
-                    "FT Exp (Yrs)":  exp_data.get("total_experience_years", 0),
-                    "Internships":   exp_data.get("internship_count", 0),
-                    "Score":         score_data["total_score"],
-                    "Status":        status_label,
-                    "Completeness":  f"{score_data.get('completeness')}/4",
-                    "Raw Breakdown": score_data["breakdown"],
-                    "Extracted Data":score_data.get("extracted_data", {}),
-                    "Raw Text":      score_data.get("raw_text", "")
+                    "Candidate":          file.name,
+                    "Profession":         display_profession(profession),
+                    "FT Exp (Yrs)":       exp_years,
+                    "Internships":        exp_data.get("internship_count", 0),
+                    "Score":              score_data["total_score"],
+                    "Status":             status_label,
+                    "Completeness":       f"{score_data.get('completeness')}/4",
+                    "Raw Breakdown":      score_data["breakdown"],
+                    "Extracted Data":     score_data.get("extracted_data", {}),
+                    "Raw Text":           score_data.get("raw_text", "")
                 })
             else:
                 st.error(f"Processing failed for {file.name}: {score_data.get('error_message')}")
 
             os.remove(tmp_path)
 
-        st.session_state.processing_time = round(time.time() - start_time, 2)
+        end_time = time.time()
+        st.session_state.processing_time = round(end_time - start_time, 2)
+
         loading_placeholder.empty()
 
         if results:
@@ -593,67 +411,20 @@ if st.session_state.get("processed_results") is not None:
 
     st.markdown("### Executive Overview")
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+
     top_prof    = df['Profession'].mode()[0] if not df.empty else "N/A"
     fraud_count = len(df[df['Status'].str.contains("FLAGGED")])
-    strong_count= len(df[df['Score'] >= 60])
-    kpi1.metric("Total Candidates",     len(df))
-    kpi2.metric("Median Score",         f"{df['Score'].median():.2f}")
+
+    kpi1.metric("Total Candidates",    len(df))
+    kpi2.metric("Median Score",        f"{df['Score'].median():.2f}")
     kpi3.metric("Highest Density Role", top_prof)
-    kpi4.metric("Strong Candidates",    strong_count,
-                help="Candidates scoring 60 or above")
+    kpi4.metric("Security Alerts",     fraud_count, delta_color="inverse")
 
-    # ── Olympic Podium (no emojis) ────────────────────────────────────────────
-    if len(df) >= 3:
-        st.markdown("### Top Candidates")
-
-        # Olympic order: Silver (2nd) LEFT, Gold (1st) CENTER, Bronze (3rd) RIGHT
-        orders      = [1, 0, 2]          # index into df (0=1st, 1=2nd, 2=3rd)
-        rank_labels = ["2nd", "1st", "3rd"]
-        css_classes = ["silver", "gold", "bronze"]
-        block_heights = ["55px", "80px", "40px"]  # 2nd, 1st, 3rd
-
-        podium_html = '<div class="podium-wrap">'
-        for order_idx, (df_idx, rank_lbl, css_cls, h) in enumerate(
-                zip(orders, rank_labels, css_classes, block_heights)):
-            row_p = df.iloc[df_idx]
-            short = (row_p['Candidate']
-                     .replace('Resume', '').replace('.pdf', '').strip())[:22]
-            podium_html += f"""
-            <div class="podium-slot">
-                <div class="podium-name-plate">
-                    <div class="podium-rank-num podium-rank-{css_cls}">{rank_lbl}</div>
-                    <div class="podium-cand-name">{short}</div>
-                    <div class="podium-cand-score">{row_p['Score']:.2f}</div>
-                    <div class="podium-cand-meta">
-                        {row_p['Profession']}<br>
-                        {row_p['Internships']} intern(s) &nbsp;·&nbsp; {row_p['Status']}
-                    </div>
-                </div>
-                <div class="podium-block podium-block-{css_cls}" style="height:{h};"></div>
-            </div>"""
-        podium_html += '</div>'
-        st.markdown(podium_html, unsafe_allow_html=True)
-        st.markdown("<br>", unsafe_allow_html=True)
-
-    # ── Score Distribution (lollipop — no drag, informative) ─────────────────
-    with st.expander("Score Distribution", expanded=False):
-        st.plotly_chart(build_score_distribution(df),
-                        use_container_width=True, config={"displayModeBar": False})
-        strong = len(df[df['Score'] >= 60])
-        good   = len(df[(df['Score'] >= 40) & (df['Score'] < 60)])
-        dev    = len(df[df['Score'] < 40])
-        t1, t2, t3 = st.columns(3)
-        t1.metric("Strong (60+)",       strong)
-        t2.metric("Competent (40-59)", good)
-        t3.metric("Developing (<40)",  dev)
 
     # ==========================================
     # SECTION 8: ADVANCED FILTERING ENGINE
     # ==========================================
     st.markdown("### Advanced Filtering")
-
-    # Build skill suggestions from the actual uploaded batch
-    all_batch_skills = get_all_skills(df)
 
     with st.container(border=True):
         col_prof, col_skill, col_exp, col_score = st.columns([1.5, 1.5, 1, 1])
@@ -661,18 +432,12 @@ if st.session_state.get("processed_results") is not None:
         with col_prof:
             available_professions = sorted(df["Profession"].unique())
             selected_professions  = st.multiselect(
-                "Filter by Profession (blank = all):",
+                "Filter by Profession (Blank = All):",
                 options=available_professions, default=[]
             )
 
         with col_skill:
-            # Multiselect with all detected skills as options — type to filter
-            selected_skills = st.multiselect(
-                "Filter by Skill (type to search):",
-                options=all_batch_skills,
-                default=[],
-                help="Only skills detected in the uploaded batch are shown."
-            )
+            skill_search = st.text_input("Search Taxonomy (e.g., Python, React):").lower().strip()
 
         with col_exp:
             max_exp        = int(df["FT Exp (Yrs)"].max()) if not df.empty else 10
@@ -681,24 +446,25 @@ if st.session_state.get("processed_results") is not None:
         with col_score:
             min_score_filter = st.slider("Min Score Threshold:", 0, 100, 0)
 
-    # Apply filters
-    filtered_df = df.copy()
     if selected_professions:
-        filtered_df = filtered_df[filtered_df["Profession"].isin(selected_professions)]
-    filtered_df = filtered_df[
-        (filtered_df["FT Exp (Yrs)"] >= min_exp_filter) &
-        (filtered_df["Score"] >= min_score_filter)
-    ]
-    if selected_skills:
-        def has_skills(extracted_data):
-            blob = str(extracted_data).lower()
-            return all(s.lower().replace(" ", "_") in blob or
-                       s.lower() in blob
-                       for s in selected_skills)
-        filtered_df = filtered_df[filtered_df["Extracted Data"].apply(has_skills)]
+        filtered_df = df[
+            (df["Profession"].isin(selected_professions)) &
+            (df["FT Exp (Yrs)"] >= min_exp_filter) &
+            (df["Score"] >= min_score_filter)
+        ]
+    else:
+        filtered_df = df[
+            (df["FT Exp (Yrs)"] >= min_exp_filter) &
+            (df["Score"] >= min_score_filter)
+        ]
+
+    if skill_search:
+        def has_skill(extracted_data):
+            return skill_search in str(extracted_data).lower()
+        filtered_df = filtered_df[filtered_df["Extracted Data"].apply(has_skill)]
 
     filtered_df = filtered_df.sort_values(by="Score", ascending=False).reset_index(drop=True)
-    filtered_df.index      = filtered_df.index + 1
+    filtered_df.index     = filtered_df.index + 1
     filtered_df.index.name = "Rank"
 
 
@@ -710,7 +476,7 @@ if st.session_state.get("processed_results") is not None:
 
     with tab1:
         if filtered_df.empty:
-            st.info("No candidates match the current filter parameters.")
+            st.info("No candidates match your current filter parameters.")
         else:
             st.dataframe(
                 filtered_df[[
@@ -723,48 +489,43 @@ if st.session_state.get("processed_results") is not None:
                         "Final Score (0-100)", format="%.2f",
                         min_value=0, max_value=100
                     ),
-                    "FT Exp (Yrs)": st.column_config.NumberColumn("FT Exp (Yrs)", format="%.2f"),
-                    "Internships":  st.column_config.NumberColumn("Internships",  format="%d"),
-                    "Status":       st.column_config.TextColumn("Tier / Status")
+                    "FT Exp (Yrs)":  st.column_config.NumberColumn("FT Exp (Yrs)",  format="%.2f"),
+                    "Internships":   st.column_config.NumberColumn("Internships",    format="%d"),
+                    "Status":        st.column_config.TextColumn("Tier / Status")
                 },
                 width="stretch"
             )
 
             st.markdown("### In-Depth Explainability & Verification")
-
-            RANK_LABELS = {1: "Rank 1  ", 2: "Rank 2  ", 3: "Rank 3  "}
-
             for idx, row in filtered_df.iterrows():
-                rank_prefix = RANK_LABELS.get(idx, "")
-                short = row['Candidate'].replace('Resume','').replace('.pdf','').strip()
-                header = f"{rank_prefix}{short}  |  Score: {row['Score']:.2f}"
+                with st.expander(f"{row['Candidate']}  |  Score: {row['Score']:.2f}"):
 
-                with st.expander(header):
                     if "FLAGGED" in row['Status']:
                         st.error("SECURITY ALERT: Anomalous formatting detected.")
 
+                    # =========================================================================
+                    # JUDGES' REQUEST: Adding the AI Assistant Tab
+                    # =========================================================================
                     inner_tab1, inner_tab2, inner_tab3, inner_tab4 = st.tabs(
-                        ["Score & Insights", "HR CRM Verification",
-                         "Developer Audit", "AI Assistant"]
+                        ["Score & Insights", "HR CRM Verification", "Developer Audit", "✨ AI Assistant"]
                     )
 
-                    # TAB 1: VISUAL INSIGHTS + RADAR
+                    # TAB 1: VISUAL INSIGHTS
                     with inner_tab1:
                         st.markdown("<div class='breakdown-header'>Algorithm Score Distribution</div>",
                                     unsafe_allow_html=True)
 
-                        exp_score   = (row['Raw Breakdown'].get('experience', 0) +
-                                       row['Raw Breakdown'].get('internships', 0))
-                        skill_score  = row['Raw Breakdown'].get('skills', 0)
-                        edu_score    = (row['Raw Breakdown'].get('cgpa_score', 0) + 
-                                        row['Raw Breakdown'].get('degree_score', 0))
-                        proj_score   = row['Raw Breakdown'].get('projects', 0)
+                        exp_score  = (row['Raw Breakdown'].get('experience', 0) +
+                                      row['Raw Breakdown'].get('internships', 0))
+                        skill_score = row['Raw Breakdown'].get('skills', 0)
+                        edu_score   = row['Raw Breakdown'].get('cgpa_score', 0)
+                        proj_score  = row['Raw Breakdown'].get('projects', 0)
 
                         p_col1, p_col2 = st.columns(2)
                         with p_col1:
-                            st.write(f"**Experience / Internships:** {exp_score:.2f} pts")
+                            st.write(f"**Experience/Internships:** {exp_score:.2f} pts")
                             st.progress(min(int(exp_score), 100))
-                            st.write(f"**Education / CGPA:** {edu_score:.2f} pts")
+                            st.write(f"**Education/CGPA:** {edu_score:.2f} pts")
                             st.progress(min(int(edu_score), 100))
                         with p_col2:
                             st.write(f"**Skills Extraction:** {skill_score:.2f} pts")
@@ -773,61 +534,23 @@ if st.session_state.get("processed_results") is not None:
                             st.progress(min(int(proj_score), 100))
 
                         st.markdown("---")
-                        st.markdown("<div class='breakdown-header'>Capability Radar</div>",
-                                    unsafe_allow_html=True)
-
-                        radar_col, tier_col = st.columns([2, 1])
-                        with radar_col:
-                            st.plotly_chart(
-                                build_radar_chart(row['Raw Breakdown'], short, normalized_weights),
-                                use_container_width=True, key=f"radar_{idx}",
-                                config={"displayModeBar": False}
-                            )
-                        with tier_col:
-                            st.markdown(f"""
-                            <div style="padding:16px;background:#F8FAFC;border-radius:8px;
-                                        border:1px solid #E2E8F0;margin-top:12px;">
-                                <div style="font-size:0.75rem;color:#64748B;
-                                            text-transform:uppercase;letter-spacing:1px;
-                                            font-weight:700;margin-bottom:8px;">
-                                    Candidate Tier
-                                </div>
-                                <div style="font-size:1.3rem;font-weight:800;margin-bottom:4px;">
-                                    {score_tier_label(row['Score'])}
-                                </div>
-                                <div style="font-size:2rem;font-weight:800;color:#4338CA;
-                                            line-height:1.1;">
-                                    {row['Score']:.2f}
-                                </div>
-                                <div style="font-size:0.75rem;color:#94A3B8;">out of 100</div>
-                                <hr style="border:none;border-top:1px solid #E2E8F0;margin:10px 0;">
-                                <div style="font-size:0.8rem;color:#64748B;line-height:1.8;">
-                                    Completeness: <strong>{row['Completeness']}</strong><br>
-                                    Internships: <strong>{row['Internships']}</strong><br>
-                                    FT Exp: <strong>{row['FT Exp (Yrs)']:.2f} yrs</strong>
-                                </div>
-                            </div>
-                            """, unsafe_allow_html=True)
-
-                        st.markdown("---")
                         st.markdown("<div class='breakdown-header'>Extracted Taxonomy Tags</div>",
                                     unsafe_allow_html=True)
 
                         extracted_json = row['Extracted Data']
                         skills_data    = extracted_json.get('skills', {})
-                        all_skills_row = []
+
+                        all_skills = []
                         for category, skill_list in skills_data.items():
                             if isinstance(skill_list, dict):
-                                all_skills_row.extend(skill_list.values())
+                                all_skills.extend(skill_list.values())
                             elif isinstance(skill_list, list):
-                                all_skills_row.extend(skill_list)
+                                all_skills.extend(skill_list)
 
-                        if all_skills_row:
-                            formatted = sorted(set(
-                                s.replace("_", " ").title() for s in all_skills_row
-                            ))
+                        if all_skills:
+                            formatted_skills = [s.replace("_", " ").title() for s in all_skills]
                             tags_html = "".join(
-                                f"<span class='skill-tag'>{s}</span>" for s in formatted
+                                [f"<span class='skill-tag'>{s}</span>" for s in set(formatted_skills)]
                             )
                             st.markdown(tags_html, unsafe_allow_html=True)
                         else:
@@ -847,21 +570,22 @@ if st.session_state.get("processed_results") is not None:
                         c_name, c_email, c_phone, c_linkedin, c_github, c_leetcode, c_portfolio = \
                             extract_contact_info(row['Raw Text'], row['Candidate'])
 
-                        exp_val = float(exp_data.get('total_experience_years', row['FT Exp (Yrs)']))
+                        exp_val = float(exp_data.get('total_experience_years',
+                                                      row['FT Exp (Yrs)']))
 
                         with st.form(key=f"crm_form_{idx}", border=True):
                             st.markdown("#### Identity & Contact Information")
                             c1, c2, c3 = st.columns(3)
-                            with c1: f_name  = st.text_input("Full Name",     value=c_name)
-                            with c2: f_email = st.text_input("Email Address", value=c_email)
-                            with c3: f_phone = st.text_input("Phone Number",  value=c_phone)
+                            with c1: f_name  = st.text_input("Full Name",      value=c_name)
+                            with c2: f_email = st.text_input("Email Address",  value=c_email)
+                            with c3: f_phone = st.text_input("Phone Number",   value=c_phone)
 
                             st.markdown("#### Digital Footprint & Profiles")
                             l1, l2, l3, l4 = st.columns(4)
-                            with l1: f_li   = st.text_input("LinkedIn",  value=c_linkedin)
-                            with l2: f_git  = st.text_input("GitHub",    value=c_github)
-                            with l3: f_leet = st.text_input("LeetCode",  value=c_leetcode)
-                            with l4: f_port = st.text_input("Portfolio", value=c_portfolio)
+                            with l1: f_li   = st.text_input("LinkedIn",    value=c_linkedin)
+                            with l2: f_git  = st.text_input("GitHub",      value=c_github)
+                            with l3: f_leet = st.text_input("LeetCode",    value=c_leetcode)
+                            with l4: f_port = st.text_input("Portfolio",   value=c_portfolio)
 
                             st.markdown("#### Professional Experience & Projects")
                             p1, p2, p3, p4 = st.columns(4)
@@ -917,26 +641,6 @@ if st.session_state.get("processed_results") is not None:
                             else:
                                 st.write("No recognized taxonomy skills extracted.")
 
-                            # NEW: Universal Manual Override via Data Editor
-                            st.markdown("##### + Add Missing Profile Entries (Manual Override)")
-                            st.caption("Click the '+' to add missing Education, Internships, Certifications, or custom sections.")
-                            
-                            # Initialize an empty dataframe for the universal dynamic table
-                            custom_entries_df = pd.DataFrame(columns=[
-                                "Section (e.g. Education, Internship)", 
-                                "Title / Item", 
-                                "Additional Details"
-                            ])
-                            
-                            # st.data_editor allows dynamic row addition inside forms natively
-                            edited_entries_df = st.data_editor(
-                                custom_entries_df,
-                                num_rows="dynamic",
-                                key=f"custom_entries_editor_{idx}",
-                                use_container_width=True,
-                                hide_index=True
-                            )
-
                             st.markdown("#### Education & System Metrics")
                             e1, e2 = st.columns(2)
                             with e1:
@@ -955,33 +659,10 @@ if st.session_state.get("processed_results") is not None:
                             )
 
                             if submit_btn:
-                                # 1. Process standard skills
                                 skills_html = "".join(
                                     f"<li><b>{k}:</b> {v}</li>\n"
                                     for k, v in f_skills.items()
                                 )
-                                
-                                # 2. Process Universal Overrides into new HTML blocks
-                                overrides_html = ""
-                                overrides_dict = {}
-                                for _, c_row in edited_entries_df.iterrows():
-                                    sec_name = str(c_row.get("Section (e.g. Education, Internship)", "")).strip()
-                                    item_title = str(c_row.get("Title / Item", "")).strip()
-                                    item_details = str(c_row.get("Additional Details", "")).strip()
-                                    
-                                    # Ensure row isn't empty
-                                    if sec_name and item_title and sec_name.lower() != "nan" and item_title.lower() != "nan":
-                                        if sec_name not in overrides_dict:
-                                            overrides_dict[sec_name] = []
-                                        detail_str = f" - {item_details}" if item_details and item_details.lower() != "nan" else ""
-                                        overrides_dict[sec_name].append(f"<b>{item_title}</b>{detail_str}")
-                                
-                                # Build the HTML divs for the custom sections
-                                for sec, items in overrides_dict.items():
-                                    list_items = "".join(f"<li>{i}</li>\n" for i in items)
-                                    overrides_html += f'<div class="box"><h2>{sec} (Manually Added)</h2><ul>{list_items}</ul></div>\n'
-
-                                # 3. Assemble Final HTML Payload
                                 html_content = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -999,30 +680,37 @@ if st.session_state.get("processed_results") is not None:
 </head>
 <body>
   <h1>Verified Candidate Profile: {f_name}</h1>
-  <div class="box"><h2>Contact &amp; Identity</h2>
-    <ul><li><b>Email:</b> {f_email}</li><li><b>Phone:</b> {f_phone}</li></ul></div>
-  <div class="box"><h2>Digital Footprint</h2>
+  <div class="box">
+    <h2>Contact &amp; Identity</h2>
+    <ul><li><b>Email:</b> {f_email}</li><li><b>Phone:</b> {f_phone}</li></ul>
+  </div>
+  <div class="box">
+    <h2>Digital Footprint</h2>
     <ul>
       <li><b>LinkedIn:</b> <a href="{f_li}">{f_li}</a></li>
       <li><b>GitHub:</b> <a href="{f_git}">{f_git}</a></li>
       <li><b>LeetCode:</b> <a href="{f_leet}">{f_leet}</a></li>
       <li><b>Portfolio:</b> <a href="{f_port}">{f_port}</a></li>
-    </ul></div>
-  <div class="box"><h2>Professional Summary</h2>
+    </ul>
+  </div>
+  <div class="box">
+    <h2>Professional Summary</h2>
     <ul>
       <li><b>Track:</b> {f_track}</li>
       <li><b>FT Experience:</b> {f_exp} Years</li>
       <li><b>Internships:</b> {f_int}</li>
       <li><b>Projects:</b> {f_proj}</li>
       <li><b>Degree Detected:</b> {f_edu}</li>
-    </ul></div>
-  <div class="box"><h2>Verified Skills Matrix</h2>
-    <ul>{skills_html}</ul></div>
-  {overrides_html}
+    </ul>
+  </div>
+  <div class="box">
+    <h2>Verified Skills Matrix</h2>
+    <ul>{skills_html}</ul>
+  </div>
 </body>
 </html>"""
                                 st.session_state[f"export_{idx}"] = html_content
-                                st.success("Data verified. Click below to download.")
+                                st.success("Data verified! Click below to download.")
 
                         if f"export_{idx}" in st.session_state:
                             st.download_button(
@@ -1042,51 +730,53 @@ if st.session_state.get("processed_results") is not None:
                             label_visibility="collapsed", disabled=True,
                             key=f"raw_text_area_{idx}_{row['Candidate']}"
                         )
-
-                    # TAB 4: AI HR ASSISTANT
+                        
+                    # =========================================================================
+                    # TAB 4: AI HR ASSISTANT (Post-Processing)
+                    # =========================================================================
                     with inner_tab4:
-                        st.markdown("<div class='breakdown-header'>GenAI Candidate Analysis</div>",
-                                    unsafe_allow_html=True)
-                        st.info("Uses a localized LLM for deep semantic insights. "
-                                "Does not alter the deterministic math score.")
-
-                        target_role = st.text_input(
-                            "Target Role / Job Description",
-                            value=row['Profession'],
-                            key=f"jd_{idx}"
-                        )
+                        st.markdown("<div class='breakdown-header'>GenAI Candidate Analysis</div>", unsafe_allow_html=True)
+                        st.info("This feature uses a localized LLM to provide deep semantic insights without altering the deterministic math score.")
+                        
+                        target_role = st.text_input("Target Role / Job Description", value=row['Profession'], key=f"jd_{idx}")
+                        
                         cache_key = f"ai_{idx}_{row['Candidate']}"
-
-                        if st.button("Run AI Analysis", key=f"ai_btn_{idx}",
+ 
+                        if st.button("✨ Ask AI HR Assistant", key=f"ai_btn_{idx}",
                                      type="primary", use_container_width=True):
                             if cache_key not in st.session_state:
-                                with st.spinner("Analyzing via Local LLM..."):
+                                with st.spinner("Analyzing semantics via Local LLM..."):
                                     st.session_state[cache_key] = analyze_candidate_llm(
                                         row["Raw Text"], target_role
                                     )
-
+ 
                         if cache_key in st.session_state:
-                            ai = st.session_state[cache_key]
-
-                            st.markdown("#### Executive Overview")
-                            st.write(ai.get("executive_overview", ""))
-
+                            ai_insights = st.session_state[cache_key]
+ 
+                            st.markdown("#### 📄 Executive Overview")
+                            st.write(ai_insights.get("executive_overview", ""))
+ 
                             c1, c2 = st.columns(2)
                             with c1:
-                                st.markdown("#### Key Strengths")
-                                for s in ai.get("strengths", []):
+                                st.markdown("#### 🟢 Key Strengths")
+                                for s in ai_insights.get("strengths", []):
                                     st.markdown(f"- {s}")
                             with c2:
-                                st.markdown("#### Potential Gaps")
-                                for s in ai.get("missing_skills", []):
+                                st.markdown("#### 🔴 Potential Gaps")
+                                for s in ai_insights.get("missing_skills", []):
                                     st.markdown(f"- {s}")
-
-                            st.markdown("#### HR Recommendation")
+ 
+                            st.markdown("#### 🎯 HR Recommendation")
+                            # PATCH 3: offline fallback → yellow warning, not green success
                             is_offline = (
-                                "unavailable" in ai.get("executive_overview", "").lower()
+                                "⚠️" in ai_insights.get("executive_overview", "") or
+                                "unavailable" in ai_insights.get("executive_overview", "").lower()
                             )
-                            rec = ai.get("hr_recommendation", "")
-                            st.warning(rec) if is_offline else st.success(rec)
+                            rec = ai_insights.get("hr_recommendation", "")
+                            if is_offline:
+                                st.warning(rec)
+                            else:
+                                st.success(rec)
 
     with tab2:
         fraud_df = df[df['Status'].str.contains("FLAGGED", case=False, na=False)]
@@ -1096,3 +786,26 @@ if st.session_state.get("processed_results") is not None:
                          width="stretch")
         else:
             st.success("No formatting anomalies detected. Shield intact.")
+
+if __name__ == "__main__":
+    tests = [
+        ("full stack developer",     "Full Stack Developer"),
+        ("ai & machine learning",    "AI & Machine Learning"),
+        ("embedded & iot",           "Embedded & IoT"),
+        ("devops",                   "DevOps"),
+        ("software engineering",     "Software Engineering"),
+        ("frontend developer",       "Frontend Developer"),
+        ("nlp researcher",           "NLP Researcher"),
+        ("Full Stack Developer",     "Full Stack Developer"),
+        ("Ai & Machine Learning",    "AI & Machine Learning"),
+        ("Embedded & Iot",           "Embedded & IoT"),
+    ]
+    print("display_profession() — all cases:")
+    all_ok = True
+    for inp, expected in tests:
+        result = display_profession(inp)
+        ok = result == expected
+        if not ok: all_ok = False
+        print(f"  {'✓' if ok else '✗'} '{inp}' → '{result}'")
+    print(f"\n{'All tests passed ✓' if all_ok else 'FAILED ✗'}")
+ 

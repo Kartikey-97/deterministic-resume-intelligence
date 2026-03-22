@@ -2,56 +2,132 @@ import re
 from collections import defaultdict
 from rapidfuzz import fuzz
 
-# -----------------------------
-# Expanded Section Keywords (Indian Context)
-# -----------------------------
 SECTION_KEYWORDS = {
-    "skills": ["skills", "technical skills", "core competencies", "technologies", "expertise", "qualifications", "tools", "it skills"],
-    "education": ["education", "academic background", "academics", "scholastic record", "educational qualifications", "scholastics"],
-    "experience": ["experience", "work history", "employment", "professional experience", "internships", "work experience", "career profile"],
-    "projects": ["projects", "personal projects", "academic projects", "key projects", "research projects"],
-    "achievements": ["achievements", "awards", "honors", "accolades", "accomplishments", "certifications and awards"],
-    "certifications": ["certifications", "licenses", "certificates", "courses"],
-    "languages": ["languages", "linguistic proficiency"],
-    "extra_curricular": ["extra-curricular", "extracurricular", "volunteer", "activities", "leadership", "positions of responsibility", "por", "co-curricular"],
-    "summary": ["summary", "profile", "objective", "about me", "career overview", "professional overview"]
+    "education": [
+        "education", "academic background", "academics",
+        "scholastic record", "educational qualifications", "scholastics",
+        "educational background", "academic qualifications", "qualifications", "degree"
+    ],
+    "skills": [
+        "skills", "technical skills", "core competencies", "technologies",
+        "expertise", "tools", "it skills", "technical stack",
+        "skills summary", "technical competencies", "competencies & interests"
+    ],
+    "experience": [
+        "experience", "work history", "employment",
+        "professional experience", "internships", "work experience",
+        "career profile", "technical experience", "professional background",
+        "career history", "work summary", "internship experience",
+        "academic experience", "industry experience"
+    ],
+    "projects": [
+        "projects", "personal projects", "academic projects",
+        "key projects", "research projects", "projects worked on",
+        "internship projects", "notable projects", "portfolio"
+    ],
+    "achievements": [
+        "achievements", "awards", "honors", "accolades",
+        "accomplishments", "certifications and awards",
+        "honors and awards", "recognition"
+    ],
+    "certifications": [
+        "certifications", "licenses", "certificates", "courses",
+        "training", "professional development", "online courses",
+        "relevant coursework", "coursework"
+    ],
+    "languages": [
+        "languages", "linguistic proficiency", "language proficiency",
+        "language skills", "languages known"
+    ],
+    "extra_curricular": [
+        "extra-curricular", "extracurricular", "volunteer", "activities",
+        "leadership", "positions of responsibility", "por",
+        "co-curricular", "hobbies", "interests",
+        "extracurricular activities"
+    ],
+    "summary": [
+        "summary", "profile", "objective", "about me",
+        "career overview", "professional overview",
+        "professional summary", "career summary",
+        "profile info", "about", "personal summary", "executive summary"
+    ]
 }
 
-# -----------------------------
-# Text normalization
-# -----------------------------
+
 def normalize(s: str) -> str:
     return re.sub(r"[^a-z ]", "", s.lower()).strip()
 
-# -----------------------------
-# Heading structure scoring
-# -----------------------------
+
+def collapse_spaced_heading(line: str) -> str:
+    """
+    Converts spaced-letter headings like 'W O R K  E X P E R I E N C E'
+    into 'WORK EXPERIENCE' so the fuzzy section matcher can recognise them.
+
+    Heuristic: ≥6 tokens, ≥75% of which are single characters.
+    This catches Abhinaya P's resume which uses this format throughout.
+    """
+    stripped = line.strip()
+    words    = stripped.split()
+    if len(words) >= 6 and (sum(1 for w in words if len(w) <= 2) / len(words)) >= 0.75:
+        collapsed = re.sub(r'(?<=[A-Za-z]) (?=[A-Za-z])', '', stripped)
+        collapsed = re.sub(r'\s{2,}', ' ', collapsed).strip()
+        return collapsed
+    return line
+
+    # ── Pattern B: 'E DUCATION' → 'EDUCATION' ────────────────────────────
+    # Trigger condition: at least one pair of [1-char-upper][ALL-CAPS-rest]
+    has_b_pattern = any(
+        i + 1 < len(words)
+        and len(words[i]) == 1
+        and words[i].isupper()
+        and words[i + 1].isupper()
+        and len(words[i + 1]) >= 2
+        for i in range(len(words) - 1)
+    )
+
+    if has_b_pattern:
+        result, i = [], 0
+        while i < len(words):
+            if (i + 1 < len(words)
+                    and len(words[i]) == 1
+                    and words[i].isupper()
+                    and words[i + 1].isupper()
+                    and len(words[i + 1]) >= 2):
+                # Merge: 'E' + 'DUCATION' → 'EDUCATION'
+                result.append(words[i] + words[i + 1])
+                i += 2
+            else:
+                result.append(words[i])
+                i += 1
+        return " ".join(result)
+
+    # ── Pattern A: 'W O R K  E X P E R I E N C E' → 'WORK EXPERIENCE' ───
+    if len(words) >= 6 and (sum(1 for w in words if len(w) <= 2) / len(words)) >= 0.75:
+        collapsed = re.sub(r'(?<=[A-Za-z]) (?=[A-Za-z])', '', stripped)
+        collapsed = re.sub(r'\s{2,}', ' ', collapsed).strip()
+        return collapsed
+
+    return line
+
+
 def heading_score(line: str) -> int:
-    # 1. HARD GATES (Immediate Disqualification)
     words = line.split()
-    
-    # ChatGPT Fix 1: Relaxed word limit to 7 for verbose headings
+
     if len(words) > 7:
         return 0
-        
-    # ChatGPT Fix 2: Only disqualify dates if the line is long (i.e. a job bullet, not a heading)
+
     if re.search(r'\b(20\d{2}|19\d{2}|present|current|now)\b', line.lower()) and len(words) > 4:
         return 0
-        
-    # If it starts with a bullet point or hyphen, it's list data, not a heading.
+
     if re.match(r'^[-•*▪>o\d]', line.strip()):
         return 0
 
-    # 2. SIGNAL SCORING
     score = 0
-
     if len(words) <= 3:
         score += 1
-        
     if not any(len(w) > 3 for w in words):
         return 0
-    
-    # Capitalization signal (50% or more capitalized words)
+
     caps = sum(1 for w in words if w and w[0].isupper())
     if words and caps / len(words) >= 0.5:
         score += 1
@@ -63,85 +139,72 @@ def heading_score(line: str) -> int:
         score += 1
 
     if line.isupper():
-        score += 2  # Stronger signal for ALL CAPS
+        score += 2
 
     return score
 
-# -----------------------------
-# Fuzzy section detection
-# -----------------------------
+
 def detect_section(line: str):
     norm = normalize(line)
     if len(norm) < 3:
         return None, 0
 
     best_section = None
-    best_score = 0
-    norm_word_count = len(norm.split())
+    best_score   = 0
+    norm_wc      = len(norm.split())
 
     for section, keywords in SECTION_KEYWORDS.items():
         for k in keywords:
-            # Get the base fuzzy score
-            score = fuzz.token_set_ratio(norm, k)
-            
-            # THE ARCHITECT'S FIX + CHATGPT'S REFINEMENT
-            kw_word_count = len(k.split())
-            word_diff = abs(norm_word_count - kw_word_count)
-            
+            score     = fuzz.token_set_ratio(norm, k)
+            word_diff = abs(norm_wc - len(k.split()))
             if word_diff > 0:
-                # Cap the penalty at 30 so we don't destroy valid multi-word headings
                 score -= min(word_diff * 10, 30)
-
             if score > best_score:
-                best_score = score
+                best_score   = score
                 best_section = section
 
-    if best_score > 75:  
+    if best_score > 75:
         return best_section, best_score
 
     return None, 0
 
-# -----------------------------
-# Resume segmentation
-# -----------------------------
+
 def segment_resume(text: str):
     lines = [line for line in text.split("\n") if line.strip()]
 
     sections = defaultdict(lambda: {
-        "lines": [],
-        "confidence": 0,
+        "lines":          [],
+        "confidence":     0,
         "headings_found": []
     })
 
     current = "general"
 
     for line in lines:
-        h_score = heading_score(line)
+        # Collapse spaced headings (both Pattern A and Pattern B) before scoring
+        collapsed = collapse_spaced_heading(line)
 
-        # Gatekeeper: Only run fuzzy matching if it structurally looks like a heading
+        h_score = heading_score(collapsed)
+
         if h_score >= 2:
-            sec, conf = detect_section(line)
+            sec, conf = detect_section(collapsed)
 
             if sec:
                 combined_conf = (0.7 * conf) + (0.3 * (h_score / 6 * 100))
-                
-                current = sec
-                
+                current       = sec
+
                 if sections[sec]["confidence"] < combined_conf:
                     sections[sec]["confidence"] = combined_conf
                 sections[sec]["headings_found"].append(line.strip())
-                
-                continue 
+                continue
 
         sections[current]["lines"].append(line)
-        
-    # Dynamically adjust confidence based on volume to prove organic parsing
+
     for sec, data in sections.items():
         if sec == "general" or data["confidence"] == 0:
             continue
-        
-        line_count = len(data["lines"])
-        variance = min(5.5, line_count * 0.15) 
+        line_count         = len(data["lines"])
+        variance           = min(5.5, line_count * 0.15)
         data["confidence"] = round(min(99.5, data["confidence"] + variance), 2)
 
     return sections
