@@ -1086,7 +1086,11 @@ if st.session_state.get("processed_results") is not None:
                                 "unavailable" in ai.get("executive_overview", "").lower()
                             )
                             rec = ai.get("hr_recommendation", "")
-                            st.warning(rec) if is_offline else st.success(rec)
+                            
+                            if is_offline:
+                                st.warning(rec)
+                            else:
+                                st.success(rec)
 
     with tab2:
         fraud_df = df[df['Status'].str.contains("FLAGGED", case=False, na=False)]
